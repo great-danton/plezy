@@ -5,7 +5,7 @@ on:
 
 env:
   FLUTTER_VERSION: "3.47.7"
-  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v7
+  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v8
   TVOS_ENGINE_URL: "https://github.com/fluttertv/engine-artifacts/releases/download/engine-b118f6897f8f3427d1390c80bbefa90ee948c97e/tvos_release_arm64.zip"
 
 jobs:
@@ -186,8 +186,12 @@ jobs:
             archive \
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee /tmp/xcodebuild.log
-          echo "===== Kernel compilation target ====="
-          grep -E "tvos_probe|main\.dart|app\.dill|frontend_server.*dart$" /tmp/xcodebuild.log | tail -5
+          echo "===== What Dart file was compiled? ====="
+          grep -E "tvos_probe|main\.dart" /tmp/xcodebuild.log | grep -v "export\|FLUTTER_TARGET" | head -10
+          echo "===== AOT compilation result ====="
+          grep -E "gen_snapshot|AOT|snapshot_assembly|app\.dill" /tmp/xcodebuild.log | head -10
+          echo "===== Any errors? ====="
+          grep -E "error:|Error:|FAILED|failed" /tmp/xcodebuild.log | grep -v "warning\|note:" | head -20
 
       - name: Fix icudtl.dat in App bundle
         run: |
