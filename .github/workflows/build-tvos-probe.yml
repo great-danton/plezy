@@ -27,22 +27,6 @@ jobs:
           echo "build_name=$BUILD_NAME" >> $GITHUB_OUTPUT
           echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
 
-      # ---------- NEW: strip iOS-only plugins ----------
-      - name: Strip iOS-only plugins for tvOS
-        run: |
-          echo "===== pubspec.yaml BEFORE ====="
-          cat pubspec.yaml
-          cp pubspec.yaml pubspec.yaml.orig
-          sed -i.bak \
-            -e '/^  os_media_controls:/d' \
-            -e '/^  wakelock_plus:/d' \
-            -e '/^  universal_gamepad:/d' \
-            pubspec.yaml
-          echo "===== pubspec.yaml AFTER ====="
-          cat pubspec.yaml
-          echo "===== diff ====="
-          diff pubspec.yaml.orig pubspec.yaml || true
-
       - name: Setup Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
         with:
