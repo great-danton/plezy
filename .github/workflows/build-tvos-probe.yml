@@ -5,7 +5,7 @@ on:
 
 env:
   FLUTTER_VERSION: "3.47.7"
-  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v5
+  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v6
   TVOS_ENGINE_URL: "https://github.com/fluttertv/engine-artifacts/releases/download/engine-b118f6897f8f3427d1390c80bbefa90ee948c97e/tvos_release_arm64.zip"
 
 jobs:
@@ -155,6 +155,9 @@ jobs:
           PACKAGE_CONFIG=$PWD/.dart_tool/package_config.json
           FLUTTER_LOCAL_ENGINE=$PWD/tvos-engine
           EOF
+          echo "===== Verifying Generated.xcconfig ====="
+          cat tvos/Flutter/Generated.xcconfig
+
 
       - name: Show Generated.xcconfig
         run: |
@@ -164,6 +167,20 @@ jobs:
           ls -la tvos-engine/out/tvos_release/gen_snapshot_arm64 || echo "NOT FOUND"
           ls -la tvos-engine/out/tvos_release/clang_arm64/gen_snapshot || echo "NOT FOUND"
           file tvos-engine/out/tvos_release/clang_arm64/gen_snapshot || true
+
+      - name: Patch xcode_appletv.sh to use tvos_probe target
+        run: |
+          # Pass --target to flutter build bundle
+          sed -i.bak \
+            's|"$FLUTTER_BIN" build bundle \\|"$FLUTTER_BIN" build bundle --target="${FLUTTER_TARGET:-lib/main.dart}" \\|g' \
+            tvos/scripts/xcode_appletv.sh
+          # Pass correct entry point to frontend_server kernel compilation
+          sed -i.bak2 \
+            's|"$FLUTTER_APPLICATION_PATH/lib/main.dart"|"${FLUTTER_TARGET:-$FLUTTER_APPLICATION_PATH/lib/main.dart}"|g' \
+            tvos/scripts/xcode_appletv.sh
+          echo "===== Patched xcode_appletv.sh ====="
+          grep -n "main.dart\|FLUTTER_TARGET\|build bundle" tvos/scripts/xcode_appletv.sh | head -30
+
 
 
       - name: Install CocoaPods dependencies
