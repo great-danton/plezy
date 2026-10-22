@@ -1,41 +1,40 @@
-import 'package:flutter/material.dart';
+import 'dart:ui' as ui;
 
 void main() {
-  runApp(const TvosProbeApp());
-}
-
-class TvosProbeApp extends StatelessWidget {
-  const TvosProbeApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      home: Scaffold(
-        backgroundColor: Colors.red,
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: const [
-              Text(
-                'TVOS OK',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 72,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              SizedBox(height: 24),
-              Text(
-                'Flutter is running on tvOS',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 36,
-                ),
-              ),
-            ],
-          ),
-        ),
+  ui.PlatformDispatcher.instance.onBeginFrame = (Duration timeStamp) {
+    final recorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(recorder);
+    
+    // Paint entire screen red
+    canvas.drawPaint(ui.Paint()..color = const ui.Color(0xFFFF0000));
+    
+    // Draw white text
+    final paragraphBuilder = ui.ParagraphBuilder(
+      ui.ParagraphStyle(
+        fontSize: 80,
+        textAlign: ui.TextAlign.center,
       ),
-    );
-  }
+    )
+      ..pushStyle(ui.TextStyle(color: const ui.Color(0xFFFFFFFF)))
+      ..addText('TVOS OK');
+    
+    final paragraph = paragraphBuilder.build()
+      ..layout(const ui.ParagraphConstraints(width: 1920));
+    
+    canvas.drawParagraph(paragraph, const ui.Offset(0, 440));
+    
+    final picture = recorder.endRecording();
+    
+    final sceneBuilder = ui.SceneBuilder();
+    sceneBuilder.pushOffset(0, 0);
+    sceneBuilder.addPicture(ui.Offset.zero, picture);
+    sceneBuilder.pop();
+    
+    ui.window.render(sceneBuilder.build());
+  };
+  
+  ui.PlatformDispatcher.instance.scheduleFrame();
+  ui.PlatformDispatcher.instance.onDrawFrame = () {
+    ui.PlatformDispatcher.instance.scheduleFrame();
+  };
 }
