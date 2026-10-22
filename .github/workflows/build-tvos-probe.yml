@@ -5,7 +5,7 @@ on:
 
 env:
   FLUTTER_VERSION: "3.47.7"
-  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v2
+  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v3
   TVOS_ENGINE_URL: "https://github.com/fluttertv/engine-artifacts/releases/download/engine-b118f6897f8f3427d1390c80bbefa90ee948c97e/tvos_release_arm64.zip"
 
 jobs:
@@ -16,7 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: tvos-probe-stripped
           persist-credentials: false
+
 
       - name: Read version from pubspec.yaml
         id: version
@@ -71,6 +73,32 @@ jobs:
           cp -r engine-extract/tvos_release_arm64/* tvos-engine/out/tvos_release/
           mkdir -p tvos-engine/out/tvos_debug_sim_unopt_arm64
           mkdir -p tvos-engine/out/tvos_debug_unopt
+
+      - name: Inspect engine contents
+        run: |
+          echo "===== tvos-engine/out/ structure ====="
+          find tvos-engine/out -maxdepth 4 | sort
+          echo ""
+          echo "===== Flutter.framework location ====="
+          find tvos-engine -name "Flutter.framework" -type d | head -5
+          echo ""
+          echo "===== gen_snapshot location ====="
+          find tvos-engine -name "gen_snapshot*" | head -10
+          echo ""
+          echo "===== Key symbols in Flutter.framework ====="
+          FLUTTER_FW=$(find tvos-engine -name "Flutter.framework" -type d | head -1)
+          if [ -n "$FLUTTER_FW" ]; then
+            echo "Found: $FLUTTER_FW"
+            nm "$FLUTTER_FW/Flutter" 2>/dev/null | grep -i "SceneDelegate" \
+              || echo "FlutterSceneDelegate NOT FOUND"
+            nm "$FLUTTER_FW/Flutter" 2>/dev/null | grep -i "ImplicitEngine" \
+              || echo "FlutterImplicitEngineDelegate NOT FOUND"
+            nm "$FLUTTER_FW/Flutter" 2>/dev/null | grep -i "FlutterAppDelegate" | head -3 \
+              || echo "FlutterAppDelegate NOT FOUND"
+          else
+            echo "Flutter.framework NOT FOUND anywhere"
+          fi
+
 
       - name: Install Flutter dependencies
         run: flutter pub get --no-example
@@ -142,20 +170,30 @@ jobs:
       - name: Inspect built app
         run: |
           APP="tvos/build/Runner.xcarchive/Products/Applications/Runner.app"
-          echo "===== Frameworks (should NOT include os_media_controls/wakelock_plus/universal_gamepad) ====="
+          echo "===== Frameworks ====="
           ls -la "$APP/Frameworks/"
           echo ""
           echo "===== flutter_assets contents ====="
           ls -la "$APP/Frameworks/App.framework/flutter_assets/" 2>/dev/null || true
           echo ""
           echo "===== icudtl.dat present? ====="
-          ls -la "$APP/Frameworks/App.framework/flutter_assets/icudtl.dat" 2>/dev/null || echo "MISSING icudtl.dat"
+          ls -la "$APP/Frameworks/App.framework/flutter_assets/icudtl.dat" \
+            2>/dev/null || echo "MISSING icudtl.dat"
           echo ""
           echo "===== App.framework/App size ====="
           du -h "$APP/Frameworks/App.framework/App" 2>/dev/null
           echo ""
-          echo "===== Flutter.framework ====="
+          echo "===== Flutter.framework size ====="
           du -h "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null
+          echo ""
+          echo "===== Key symbols in BUILT Flutter.framework ====="
+          nm "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null \
+            | grep -i "SceneDelegate" \
+            || echo "FlutterSceneDelegate NOT in built Flutter.framework"
+          nm "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null \
+            | grep -i "ImplicitEngine" \
+            || echo "FlutterImplicitEngineDelegate NOT in built Flutter.framework"
+
 
       - name: Create IPA
         run: |
