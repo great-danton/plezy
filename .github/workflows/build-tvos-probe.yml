@@ -218,8 +218,8 @@ jobs:
           ls -la "$APP/Frameworks/App.framework/flutter_assets/icudtl.dat" \
             2>/dev/null || echo "MISSING icudtl.dat"
           echo ""
-          echo "===== App.framework/App size ====="
-          du -h "$APP/Frameworks/App.framework/App" 2>/dev/null
+          echo "===== App.framework/App size (should be ~10-15MB for probe) ====="
+          du -h "$APP/Frameworks/App.framework/App"
           echo ""
           echo "===== Flutter.framework size ====="
           du -h "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null
