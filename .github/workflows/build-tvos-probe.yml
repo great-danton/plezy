@@ -5,7 +5,7 @@ on:
 
 env:
   FLUTTER_VERSION: "3.47.7"
-  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v1
+  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v2
   TVOS_ENGINE_URL: "https://github.com/fluttertv/engine-artifacts/releases/download/engine-b118f6897f8f3427d1390c80bbefa90ee948c97e/tvos_release_arm64.zip"
 
 jobs:
@@ -26,7 +26,22 @@ jobs:
           BUILD_NUMBER="${VERSION#*+}"
           echo "build_name=$BUILD_NAME" >> $GITHUB_OUTPUT
           echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
-          echo "Plezy version: $BUILD_NAME ($BUILD_NUMBER)"
+
+      # ---------- NEW: strip iOS-only plugins ----------
+      - name: Strip iOS-only plugins for tvOS
+        run: |
+          echo "===== pubspec.yaml BEFORE ====="
+          cat pubspec.yaml
+          cp pubspec.yaml pubspec.yaml.orig
+          sed -i.bak \
+            -e '/^  os_media_controls:/d' \
+            -e '/^  wakelock_plus:/d' \
+            -e '/^  universal_gamepad:/d' \
+            pubspec.yaml
+          echo "===== pubspec.yaml AFTER ====="
+          cat pubspec.yaml
+          echo "===== diff ====="
+          diff pubspec.yaml.orig pubspec.yaml || true
 
       - name: Setup Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
@@ -74,7 +89,23 @@ jobs:
           mkdir -p tvos-engine/out/tvos_debug_unopt
 
       - name: Install Flutter dependencies
-        run: flutter pub get --enforce-lockfile --no-example
+        run: flutter pub get --no-example
+
+      - name: Print GeneratedPluginRegistrant (iOS/tvOS)
+        run: |
+          echo "===== tvos/Runner/GeneratedPluginRegistrant.* ====="
+          ls -la tvos/Runner/GeneratedPluginRegistrant* 2>/dev/null || true
+          for f in tvos/Runner/GeneratedPluginRegistrant.swift tvos/Runner/GeneratedPluginRegistrant.m tvos/Runner/GeneratedPluginRegistrant.h; do
+            if [ -f "$f" ]; then
+              echo "----- $f -----"
+              cat "$f"
+            fi
+          done
+
+      - name: Print tvos/Podfile
+        run: |
+          echo "===== tvos/Podfile ====="
+          cat tvos/Podfile 2>/dev/null || echo "(no tvos/Podfile)"
 
       - name: Setup host_release tools
         run: |
@@ -127,28 +158,20 @@ jobs:
       - name: Inspect built app
         run: |
           APP="tvos/build/Runner.xcarchive/Products/Applications/Runner.app"
-          echo "===== App bundle top-level ====="
-          ls -la "$APP"
+          echo "===== Frameworks (should NOT include os_media_controls/wakelock_plus/universal_gamepad) ====="
+          ls -la "$APP/Frameworks/"
           echo ""
-          echo "===== Frameworks ====="
-          ls -la "$APP/Frameworks/" 2>/dev/null || true
+          echo "===== flutter_assets contents ====="
+          ls -la "$APP/Frameworks/App.framework/flutter_assets/" 2>/dev/null || true
           echo ""
-          echo "===== App.framework contents ====="
-          ls -la "$APP/Frameworks/App.framework/" 2>/dev/null || true
+          echo "===== icudtl.dat present? ====="
+          ls -la "$APP/Frameworks/App.framework/flutter_assets/icudtl.dat" 2>/dev/null || echo "MISSING icudtl.dat"
           echo ""
-          echo "===== App.framework/App size and arch ====="
-          file "$APP/Frameworks/App.framework/App" 2>/dev/null || true
-          du -h "$APP/Frameworks/App.framework/App" 2>/dev/null || true
+          echo "===== App.framework/App size ====="
+          du -h "$APP/Frameworks/App.framework/App" 2>/dev/null
           echo ""
           echo "===== Flutter.framework ====="
-          file "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null || true
-          du -h "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null || true
-          echo ""
-          echo "===== Info.plist key values ====="
-          PLIST="$APP/Info.plist"
-          for key in CFBundleIdentifier CFBundleExecutable CFBundleSupportedPlatforms UIDeviceFamily MinimumOSVersion CFBundleShortVersionString CFBundleVersion; do
-            echo "$key: $(/usr/libexec/PlistBuddy -c "Print :$key" "$PLIST" 2>/dev/null || echo '(missing)')"
-          done
+          du -h "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null
 
       - name: Create IPA
         run: |
