@@ -5,7 +5,7 @@ on:
 
 env:
   FLUTTER_VERSION: "3.47.7"
-  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v3
+  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v4
   TVOS_ENGINE_URL: "https://github.com/fluttertv/engine-artifacts/releases/download/engine-b118f6897f8f3427d1390c80bbefa90ee948c97e/tvos_release_arm64.zip"
 
 jobs:
@@ -131,9 +131,13 @@ jobs:
              tvos-engine/out/host_release/dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot
           cp -R "$FLUTTER_CACHE/artifacts/engine/common/flutter_patched_sdk" \
              tvos-engine/out/host_release/flutter_patched_sdk
-          cp "$FLUTTER_CACHE/artifacts/engine/ios-release/gen_snapshot_arm64" \
-             tvos-engine/out/tvos_release/gen_snapshot_arm64
-          chmod +x tvos-engine/out/tvos_release/gen_snapshot_arm64
+          # Use the tvOS gen_snapshot from the engine zip, not the iOS one
+          chmod +x tvos-engine/out/tvos_release/clang_arm64/gen_snapshot
+          # Also symlink to the path xcode_appletv.sh checks first
+          ln -sf \
+            "$PWD/tvos-engine/out/tvos_release/clang_arm64/gen_snapshot" \
+            tvos-engine/out/tvos_release/gen_snapshot_arm64
+
 
       - name: Generate Generated.xcconfig
         run: |
@@ -166,6 +170,17 @@ jobs:
             -archivePath $PWD/build/Runner.xcarchive \
             archive \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Fix icudtl.dat in App bundle
+        run: |
+          APP="tvos/build/Runner.xcarchive/Products/Applications/Runner.app"
+          ASSETS="$APP/Frameworks/App.framework/flutter_assets"
+          echo "===== Copying icudtl.dat into flutter_assets ====="
+          cp tvos-engine/out/tvos_release/Flutter.framework/icudtl.dat \
+             "$ASSETS/icudtl.dat"
+          echo "===== Verifying ====="
+          ls -la "$ASSETS/icudtl.dat"
+
 
       - name: Inspect built app
         run: |
