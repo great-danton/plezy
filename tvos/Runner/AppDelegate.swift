@@ -28,8 +28,8 @@ import UIKit
     return result
   }
 
-  // Deliberately empty — no plugins registered. Prints to confirm we got here.
+  // Deliberately empty — zero plugins registered
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
-    NSLog("PLEZY-PROBE: didInitializeImplicitFlutterEngine — called, registering nothing")
+    NSLog("PLEZY-PROBE: didInitializeImplicitFlutterEngine — called, registering NOTHING")
   }
 }
