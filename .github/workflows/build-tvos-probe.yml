@@ -5,7 +5,7 @@ on:
 
 env:
   FLUTTER_VERSION: "3.47.7"
-  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v6
+  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v7
   TVOS_ENGINE_URL: "https://github.com/fluttertv/engine-artifacts/releases/download/engine-b118f6897f8f3427d1390c80bbefa90ee948c97e/tvos_release_arm64.zip"
 
 jobs:
@@ -139,6 +139,7 @@ jobs:
             tvos-engine/out/tvos_release/gen_snapshot_arm64
 
 
+
       - name: Generate Generated.xcconfig
         run: |
           cat > tvos/Flutter/Generated.xcconfig << EOF
@@ -155,36 +156,23 @@ jobs:
           PACKAGE_CONFIG=$PWD/.dart_tool/package_config.json
           FLUTTER_LOCAL_ENGINE=$PWD/tvos-engine
           EOF
-          echo "===== Verifying Generated.xcconfig ====="
+          echo "===== Generated.xcconfig ====="
           cat tvos/Flutter/Generated.xcconfig
-
-
-      - name: Show Generated.xcconfig
-        run: |
-          echo "===== tvos/Flutter/Generated.xcconfig ====="
-          cat tvos/Flutter/Generated.xcconfig
-          echo "===== gen_snapshot check ====="
-          ls -la tvos-engine/out/tvos_release/gen_snapshot_arm64 || echo "NOT FOUND"
-          ls -la tvos-engine/out/tvos_release/clang_arm64/gen_snapshot || echo "NOT FOUND"
-          file tvos-engine/out/tvos_release/clang_arm64/gen_snapshot || true
-
-      - name: Patch xcode_appletv.sh to use tvos_probe target
-        run: |
-          # Pass --target to flutter build bundle
-          sed -i.bak \
-            's|"$FLUTTER_BIN" build bundle \\|"$FLUTTER_BIN" build bundle --target="${FLUTTER_TARGET:-lib/main.dart}" \\|g' \
-            tvos/scripts/xcode_appletv.sh
-          # Pass correct entry point to frontend_server kernel compilation
-          sed -i.bak2 \
-            's|"$FLUTTER_APPLICATION_PATH/lib/main.dart"|"${FLUTTER_TARGET:-$FLUTTER_APPLICATION_PATH/lib/main.dart}"|g' \
-            tvos/scripts/xcode_appletv.sh
-          echo "===== Patched xcode_appletv.sh ====="
-          grep -n "main.dart\|FLUTTER_TARGET\|build bundle" tvos/scripts/xcode_appletv.sh | head -30
-
-
 
       - name: Install CocoaPods dependencies
         run: cd tvos && pod install
+
+      - name: Patch xcode_appletv.sh for tvos_probe target
+        run: |
+          echo "===== Lines with main.dart ====="
+          grep -n "main.dart" tvos/scripts/xcode_appletv.sh
+          
+          sed -i.bak "s/lib\/main\.dart/lib\/tvos_probe.dart/g" tvos/scripts/xcode_appletv.sh
+          
+          echo "===== After patch ====="
+          grep -n "tvos_probe\|main.dart" tvos/scripts/xcode_appletv.sh
+          
+          bash -n tvos/scripts/xcode_appletv.sh && echo "Syntax OK" || { echo "SYNTAX ERROR"; exit 1; }
 
       - name: Build tvOS (no codesign)
         run: |
@@ -198,30 +186,22 @@ jobs:
             archive \
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee /tmp/xcodebuild.log
-          echo "===== xcode_appletv.sh output (grep) ====="
-          grep -E "└─|ERROR|error:|warning:|FLUTTER|kernel|gen_snapshot|snapshot|icudtl|App\.framework|Flutter\.framework|BuildApp|BuildAppRelease|BuildAppDebug" \
-            /tmp/xcodebuild.log || true
-          echo "===== Last 100 lines of build log ====="
-          tail -100 /tmp/xcodebuild.log
-
+          echo "===== Kernel compilation target ====="
+          grep -E "tvos_probe|main\.dart|app\.dill|frontend_server.*dart$" /tmp/xcodebuild.log | tail -5
 
       - name: Fix icudtl.dat in App bundle
         run: |
           APP="tvos/build/Runner.xcarchive/Products/Applications/Runner.app"
           ASSETS="$APP/Frameworks/App.framework/flutter_assets"
-          echo "===== flutter_assets BEFORE ====="
-          ls -la "$ASSETS/"
-          echo "===== Copying icudtl.dat ====="
-          cp tvos-engine/out/tvos_release/Flutter.framework/icudtl.dat \
-             "$ASSETS/icudtl.dat"
-          echo "===== flutter_assets AFTER ====="
-          ls -la "$ASSETS/"
-          echo "===== icudtl.dat size ====="
-          du -h "$ASSETS/icudtl.dat"
-          echo "===== App.framework/App arch check ====="
-          file "$APP/Frameworks/App.framework/App"
-          echo "===== Flutter.framework/Flutter arch check ====="
-          file "$APP/Frameworks/Flutter.framework/Flutter"
+          if [ -d "$ASSETS" ]; then
+            cp tvos-engine/out/tvos_release/Flutter.framework/icudtl.dat "$ASSETS/icudtl.dat"
+            echo "icudtl.dat copied: $(du -h "$ASSETS/icudtl.dat")"
+          else
+            echo "MISSING flutter_assets — build failed"
+            find tvos/build -name "flutter_assets" -type d 2>/dev/null
+            exit 1
+          fi
+
 
 
 
