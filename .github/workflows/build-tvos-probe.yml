@@ -5,7 +5,7 @@ on:
 
 env:
   FLUTTER_VERSION: "3.47.7"
-  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v4
+  TRUSTED_BUILD_CACHE_VERSION: trusted-build-probe-v5
   TVOS_ENGINE_URL: "https://github.com/fluttertv/engine-artifacts/releases/download/engine-b118f6897f8f3427d1390c80bbefa90ee948c97e/tvos_release_arm64.zip"
 
 jobs:
@@ -156,6 +156,16 @@ jobs:
           FLUTTER_LOCAL_ENGINE=$PWD/tvos-engine
           EOF
 
+      - name: Show Generated.xcconfig
+        run: |
+          echo "===== tvos/Flutter/Generated.xcconfig ====="
+          cat tvos/Flutter/Generated.xcconfig
+          echo "===== gen_snapshot check ====="
+          ls -la tvos-engine/out/tvos_release/gen_snapshot_arm64 || echo "NOT FOUND"
+          ls -la tvos-engine/out/tvos_release/clang_arm64/gen_snapshot || echo "NOT FOUND"
+          file tvos-engine/out/tvos_release/clang_arm64/gen_snapshot || true
+
+
       - name: Install CocoaPods dependencies
         run: cd tvos && pod install
 
@@ -169,17 +179,33 @@ jobs:
             -destination generic/platform=tvOS \
             -archivePath $PWD/build/Runner.xcarchive \
             archive \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee /tmp/xcodebuild.log
+          echo "===== xcode_appletv.sh output (grep) ====="
+          grep -E "└─|ERROR|error:|warning:|FLUTTER|kernel|gen_snapshot|snapshot|icudtl|App\.framework|Flutter\.framework|BuildApp|BuildAppRelease|BuildAppDebug" \
+            /tmp/xcodebuild.log || true
+          echo "===== Last 100 lines of build log ====="
+          tail -100 /tmp/xcodebuild.log
+
 
       - name: Fix icudtl.dat in App bundle
         run: |
           APP="tvos/build/Runner.xcarchive/Products/Applications/Runner.app"
           ASSETS="$APP/Frameworks/App.framework/flutter_assets"
-          echo "===== Copying icudtl.dat into flutter_assets ====="
+          echo "===== flutter_assets BEFORE ====="
+          ls -la "$ASSETS/"
+          echo "===== Copying icudtl.dat ====="
           cp tvos-engine/out/tvos_release/Flutter.framework/icudtl.dat \
              "$ASSETS/icudtl.dat"
-          echo "===== Verifying ====="
-          ls -la "$ASSETS/icudtl.dat"
+          echo "===== flutter_assets AFTER ====="
+          ls -la "$ASSETS/"
+          echo "===== icudtl.dat size ====="
+          du -h "$ASSETS/icudtl.dat"
+          echo "===== App.framework/App arch check ====="
+          file "$APP/Frameworks/App.framework/App"
+          echo "===== Flutter.framework/Flutter arch check ====="
+          file "$APP/Frameworks/Flutter.framework/Flutter"
+
 
 
       - name: Inspect built app
