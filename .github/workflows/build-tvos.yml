@@ -5,7 +5,7 @@ on:
 
 env:
   FLUTTER_VERSION: "3.47.7"
-  TRUSTED_BUILD_CACHE_VERSION: trusted-build-v1
+  TRUSTED_BUILD_CACHE_VERSION: trusted-build-v2
   TVOS_ENGINE_URL: "https://github.com/fluttertv/engine-artifacts/releases/download/engine-b118f6897f8f3427d1390c80bbefa90ee948c97e/tvos_release_arm64.zip"
 
 jobs:
@@ -18,6 +18,7 @@ jobs:
         with:
           persist-credentials: false
 
+
       - name: Read version from pubspec.yaml
         id: version
         run: |
@@ -26,7 +27,6 @@ jobs:
           BUILD_NUMBER="${VERSION#*+}"
           echo "build_name=$BUILD_NAME" >> $GITHUB_OUTPUT
           echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
-          echo "Plezy version: $BUILD_NAME ($BUILD_NUMBER)"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
@@ -73,8 +73,50 @@ jobs:
           mkdir -p tvos-engine/out/tvos_debug_sim_unopt_arm64
           mkdir -p tvos-engine/out/tvos_debug_unopt
 
+      - name: Inspect engine contents
+        run: |
+          echo "===== tvos-engine/out/ structure ====="
+          find tvos-engine/out -maxdepth 4 | sort
+          echo ""
+          echo "===== Flutter.framework location ====="
+          find tvos-engine -name "Flutter.framework" -type d | head -5
+          echo ""
+          echo "===== gen_snapshot location ====="
+          find tvos-engine -name "gen_snapshot*" | head -10
+          echo ""
+          echo "===== Key symbols in Flutter.framework ====="
+          FLUTTER_FW=$(find tvos-engine -name "Flutter.framework" -type d | head -1)
+          if [ -n "$FLUTTER_FW" ]; then
+            echo "Found: $FLUTTER_FW"
+            nm "$FLUTTER_FW/Flutter" 2>/dev/null | grep -i "SceneDelegate" \
+              || echo "FlutterSceneDelegate NOT FOUND"
+            nm "$FLUTTER_FW/Flutter" 2>/dev/null | grep -i "ImplicitEngine" \
+              || echo "FlutterImplicitEngineDelegate NOT FOUND"
+            nm "$FLUTTER_FW/Flutter" 2>/dev/null | grep -i "FlutterAppDelegate" | head -3 \
+              || echo "FlutterAppDelegate NOT FOUND"
+          else
+            echo "Flutter.framework NOT FOUND anywhere"
+          fi
+
+
       - name: Install Flutter dependencies
-        run: flutter pub get --enforce-lockfile --no-example
+        run: flutter pub get --no-example
+
+      - name: Print GeneratedPluginRegistrant (iOS/tvOS)
+        run: |
+          echo "===== tvos/Runner/GeneratedPluginRegistrant.* ====="
+          ls -la tvos/Runner/GeneratedPluginRegistrant* 2>/dev/null || true
+          for f in tvos/Runner/GeneratedPluginRegistrant.swift tvos/Runner/GeneratedPluginRegistrant.m tvos/Runner/GeneratedPluginRegistrant.h; do
+            if [ -f "$f" ]; then
+              echo "----- $f -----"
+              cat "$f"
+            fi
+          done
+
+      - name: Print tvos/Podfile
+        run: |
+          echo "===== tvos/Podfile ====="
+          cat tvos/Podfile 2>/dev/null || echo "(no tvos/Podfile)"
 
       - name: Setup host_release tools
         run: |
@@ -88,9 +130,14 @@ jobs:
              tvos-engine/out/host_release/dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot
           cp -R "$FLUTTER_CACHE/artifacts/engine/common/flutter_patched_sdk" \
              tvos-engine/out/host_release/flutter_patched_sdk
-          cp "$FLUTTER_CACHE/artifacts/engine/ios-release/gen_snapshot_arm64" \
-             tvos-engine/out/tvos_release/gen_snapshot_arm64
-          chmod +x tvos-engine/out/tvos_release/gen_snapshot_arm64
+          # Use the tvOS gen_snapshot from the engine zip, not the iOS one
+          chmod +x tvos-engine/out/tvos_release/clang_arm64/gen_snapshot
+          # Also symlink to the path xcode_appletv.sh checks first
+          ln -sf \
+            "$PWD/tvos-engine/out/tvos_release/clang_arm64/gen_snapshot" \
+            tvos-engine/out/tvos_release/gen_snapshot_arm64
+
+
 
       - name: Generate Generated.xcconfig
         run: |
@@ -108,6 +155,8 @@ jobs:
           PACKAGE_CONFIG=$PWD/.dart_tool/package_config.json
           FLUTTER_LOCAL_ENGINE=$PWD/tvos-engine
           EOF
+          echo "===== Generated.xcconfig ====="
+          cat tvos/Flutter/Generated.xcconfig
 
       - name: Install CocoaPods dependencies
         run: cd tvos && pod install
@@ -122,43 +171,57 @@ jobs:
             -destination generic/platform=tvOS \
             -archivePath $PWD/build/Runner.xcarchive \
             archive \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee /tmp/xcodebuild.log
+          echo "===== What Dart file was compiled? ====="
+          grep -E "tvos_probe|main\.dart" /tmp/xcodebuild.log | grep -v "export\|FLUTTER_TARGET" | head -10
+          echo "===== AOT compilation result ====="
+          grep -E "gen_snapshot|AOT|snapshot_assembly|app\.dill" /tmp/xcodebuild.log | head -10
+          echo "===== Any errors? ====="
+          grep -E "error:|Error:|FAILED|failed" /tmp/xcodebuild.log | grep -v "warning\|note:" | head -20
 
-      - name: Inspect archive structure
+      - name: Fix icudtl.dat in App bundle
         run: |
           APP="tvos/build/Runner.xcarchive/Products/Applications/Runner.app"
-          echo "===== Top-level Runner.app ====="
-          ls -la "$APP"
-          
+          ASSETS="$APP/Frameworks/App.framework/flutter_assets"
+          if [ -d "$ASSETS" ]; then
+            cp tvos-engine/out/tvos_release/Flutter.framework/icudtl.dat "$ASSETS/icudtl.dat"
+            echo "icudtl.dat copied: $(du -h "$ASSETS/icudtl.dat")"
+          else
+            echo "MISSING flutter_assets — build failed"
+            find tvos/build -name "flutter_assets" -type d 2>/dev/null
+            exit 1
+          fi
+
+
+
+
+      - name: Inspect built app
+        run: |
+          APP="tvos/build/Runner.xcarchive/Products/Applications/Runner.app"
           echo "===== Frameworks ====="
-          ls -la "$APP/Frameworks/" 2>/dev/null
-          
-          echo "===== App.framework contents ====="
-          ls -laR "$APP/Frameworks/App.framework/" 2>/dev/null
-          
-          echo "===== Flutter.framework contents ====="
-          ls -laR "$APP/Frameworks/Flutter.framework/" 2>/dev/null
-          
-          echo "===== Binary architectures ====="
-          file "$APP/Runner" || true
-          file "$APP/Frameworks/App.framework/App" || true
-          file "$APP/Frameworks/Flutter.framework/Flutter" || true
-          
-          echo "===== Binary sizes ====="
-          du -h "$APP/Runner" 2>/dev/null
-          du -h "$APP/Frameworks/App.framework/App" 2>/dev/null
+          ls -la "$APP/Frameworks/"
+          echo ""
+          echo "===== flutter_assets contents ====="
+          ls -la "$APP/Frameworks/App.framework/flutter_assets/" 2>/dev/null || true
+          echo ""
+          echo "===== icudtl.dat present? ====="
+          ls -la "$APP/Frameworks/App.framework/flutter_assets/icudtl.dat" \
+            2>/dev/null || echo "MISSING icudtl.dat"
+          echo ""
+          echo "===== App.framework/App size (should be ~10-15MB for probe) ====="
+          du -h "$APP/Frameworks/App.framework/App"
+          echo ""
+          echo "===== Flutter.framework size ====="
           du -h "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null
-          
-          echo "===== Info.plist key values ====="
-          PLIST="$APP/Info.plist"
-          for key in CFBundleIdentifier CFBundleExecutable CFBundleSupportedPlatforms UIDeviceFamily MinimumOSVersion CFBundleShortVersionString CFBundleVersion; do
-            echo "$key: $(/usr/libexec/PlistBuddy -c "Print :$key" "$PLIST" 2>/dev/null || echo '(missing)')"
-          done
-          
-          echo "===== Existing signatures ====="
-          codesign -dv --verbose=4 "$APP" 2>&1 | head -20 || true
-          codesign -dv --verbose=4 "$APP/Frameworks/App.framework/App" 2>&1 | head -10 || true
-          codesign -dv --verbose=4 "$APP/Frameworks/Flutter.framework/Flutter" 2>&1 | head -10 || true
+          echo ""
+          echo "===== Key symbols in BUILT Flutter.framework ====="
+          nm "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null \
+            | grep -i "SceneDelegate" \
+            || echo "FlutterSceneDelegate NOT in built Flutter.framework"
+          nm "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null \
+            | grep -i "ImplicitEngine" \
+            || echo "FlutterImplicitEngineDelegate NOT in built Flutter.framework"
 
 
       - name: Create IPA
