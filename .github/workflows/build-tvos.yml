@@ -8,7 +8,7 @@ on:
         description: "Version of the matching edde746/flutter-plezy engine release"
         required: true
         type: string
-        default: "3.47.7"
+        default: "3.47.1"
 
 permissions:
   contents: read
@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 60
 
     env:
-      FLUTTER_VERSION: "3.47.7"
+      FLUTTER_VERSION: "3.47.1"
       ENGINE_VERSION: ${{ inputs.engine_version }}
       TRUSTED_BUILD_CACHE_VERSION: trusted-tvos-v1
 
