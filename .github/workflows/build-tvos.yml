@@ -233,12 +233,12 @@ jobs:
 
           echo "===== App executable ====="
           file "$APP_BINARY"
-          lipo -verify_arch arm64 "$APP_BINARY"
+          lipo "$APP_BINARY" -verify_arch arm64
           lipo -info "$APP_BINARY"
-
+          
           echo "===== Flutter engine ====="
           file "$ENGINE_BINARY"
-          lipo -verify_arch arm64 "$ENGINE_BINARY"
+          lipo "$ENGINE_BINARY" -verify_arch arm64
           lipo -info "$ENGINE_BINARY"
 
           echo "===== Flutter assets ====="
