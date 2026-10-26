@@ -1,6 +1,7 @@
 # tvOS builds of Plezy
-not related to the upstream Plezy except by forking and build action
-all credit to Plezy awesome devs
+not related to the upstream Plezy except by forking and tvOS build action.
+
+all credit goes to Plezy's awesome devs
 
 <h1>
   <img src="assets/plezy.png" alt="Plezy Logo" height="24" style="vertical-align: middle;" />
