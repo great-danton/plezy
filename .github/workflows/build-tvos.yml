@@ -1,34 +1,55 @@
+
 name: Build tvOS
 
 on:
   workflow_dispatch:
+    inputs:
+      engine_version:
+        description: "Version of the matching edde746/flutter-plezy engine release"
+        required: true
+        type: string
+        default: "3.47.7"
 
-env:
-  FLUTTER_VERSION: "3.47.7"
-  TRUSTED_BUILD_CACHE_VERSION: trusted-build-v2
-  TVOS_ENGINE_URL: "https://github.com/fluttertv/engine-artifacts/releases/download/engine-b118f6897f8f3427d1390c80bbefa90ee948c97e/tvos_release_arm64.zip"
+permissions:
+  contents: read
 
 jobs:
   build-tvos:
+    name: Build Plezy for Apple TV
     runs-on: macos-26
-    permissions:
-      contents: read
+    timeout-minutes: 60
+
+    env:
+      FLUTTER_VERSION: "3.47.7"
+      ENGINE_VERSION: ${{ inputs.engine_version }}
+      TRUSTED_BUILD_CACHE_VERSION: trusted-tvos-v1
+
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Checkout Plezy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
-
-      - name: Read version from pubspec.yaml
+      - name: Read app version
         id: version
+        shell: bash
         run: |
-          VERSION=$(grep '^version:' pubspec.yaml | head -1 | sed 's/version: //' | tr -d ' ')
-          BUILD_NAME="${VERSION%%+*}"
-          BUILD_NUMBER="${VERSION#*+}"
-          echo "build_name=$BUILD_NAME" >> $GITHUB_OUTPUT
-          echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import re
+          from pathlib import Path
 
-      - name: Setup Flutter
+          text = Path("pubspec.yaml").read_text()
+          match = re.search(r"(?m)^version:\s*['\"]?([^'\"\s#]+)", text)
+          if not match:
+              raise SystemExit("Could not read version from pubspec.yaml")
+
+          version = match.group(1)
+          parts = version.split("+", 1)
+          print(f"build_name={parts[0]}")
+          print(f"build_number={parts[1] if len(parts) > 1 else '1'}")
+          PY
+
+      - name: Set up Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
         with:
           channel: stable
@@ -36,14 +57,12 @@ jobs:
           cache: true
           cache-key: "${{ env.TRUSTED_BUILD_CACHE_VERSION }}-flutter-:os:-:channel:-:version:-:arch:-:hash:"
           pub-cache: false
-          cache-save-always: true
 
       - name: Cache Pub dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.pub-cache
           key: ${{ env.TRUSTED_BUILD_CACHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-pub-${{ hashFiles('pubspec.yaml', 'pubspec.lock') }}
-          save-always: true
 
       - name: Cache CocoaPods
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -53,185 +72,203 @@ jobs:
             ~/Library/Caches/CocoaPods
             ~/.cocoapods
           key: ${{ env.TRUSTED_BUILD_CACHE_VERSION }}-${{ runner.os }}-tvos-pods-${{ hashFiles('tvos/Podfile.lock') }}
-          save-always: true
 
-      - name: Cache tvOS engine
-        id: tvos-engine-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: tvos-engine
-          key: ${{ env.TRUSTED_BUILD_CACHE_VERSION }}-tvos-engine-b118f6897f8f3427d1390c80bbefa90ee948c97e
-          save-always: true
-
-      - name: Download tvOS Flutter engine
-        if: steps.tvos-engine-cache.outputs.cache-hit != 'true'
-        run: |
-          curl -L ${{ env.TVOS_ENGINE_URL }} -o tvos-engine.zip
-          unzip tvos-engine.zip -d engine-extract
-          mkdir -p tvos-engine/out/tvos_release
-          cp -r engine-extract/tvos_release_arm64/* tvos-engine/out/tvos_release/
-          mkdir -p tvos-engine/out/tvos_debug_sim_unopt_arm64
-          mkdir -p tvos-engine/out/tvos_debug_unopt
-
-      - name: Inspect engine contents
-        run: |
-          echo "===== tvos-engine/out/ structure ====="
-          find tvos-engine/out -maxdepth 4 | sort
-          echo ""
-          echo "===== Flutter.framework location ====="
-          find tvos-engine -name "Flutter.framework" -type d | head -5
-          echo ""
-          echo "===== gen_snapshot location ====="
-          find tvos-engine -name "gen_snapshot*" | head -10
-          echo ""
-          echo "===== Key symbols in Flutter.framework ====="
-          FLUTTER_FW=$(find tvos-engine -name "Flutter.framework" -type d | head -1)
-          if [ -n "$FLUTTER_FW" ]; then
-            echo "Found: $FLUTTER_FW"
-            nm "$FLUTTER_FW/Flutter" 2>/dev/null | grep -i "SceneDelegate" \
-              || echo "FlutterSceneDelegate NOT FOUND"
-            nm "$FLUTTER_FW/Flutter" 2>/dev/null | grep -i "ImplicitEngine" \
-              || echo "FlutterImplicitEngineDelegate NOT FOUND"
-            nm "$FLUTTER_FW/Flutter" 2>/dev/null | grep -i "FlutterAppDelegate" | head -3 \
-              || echo "FlutterAppDelegate NOT FOUND"
-          else
-            echo "Flutter.framework NOT FOUND anywhere"
-          fi
-
-
-      - name: Install Flutter dependencies
+      - name: Install Dart dependencies
         run: flutter pub get --no-example
 
-      - name: Print GeneratedPluginRegistrant (iOS/tvOS)
+      - name: Prepare Flutter host tools
+        run: flutter precache --ios
+
+      - name: Download matching Plezy tvOS engine
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          echo "===== tvos/Runner/GeneratedPluginRegistrant.* ====="
-          ls -la tvos/Runner/GeneratedPluginRegistrant* 2>/dev/null || true
-          for f in tvos/Runner/GeneratedPluginRegistrant.swift tvos/Runner/GeneratedPluginRegistrant.m tvos/Runner/GeneratedPluginRegistrant.h; do
-            if [ -f "$f" ]; then
-              echo "----- $f -----"
-              cat "$f"
-            fi
-          done
+          set -euo pipefail
 
-      - name: Print tvos/Podfile
+          mkdir -p "$RUNNER_TEMP/plezy-engine"
+
+          gh release download "$ENGINE_VERSION" \
+            --repo edde746/flutter-plezy \
+            --pattern "flutter-tvos-${ENGINE_VERSION}.tar.gz" \
+            --dir "$RUNNER_TEMP/plezy-engine"
+
+          ARCHIVE="$RUNNER_TEMP/plezy-engine/flutter-tvos-${ENGINE_VERSION}.tar.gz"
+
+          if [[ ! -f "$ARCHIVE" ]]; then
+            echo "::error::Engine release archive was not downloaded."
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/plezy-engine/extracted"
+          tar -xzf "$ARCHIVE" \
+            -C "$RUNNER_TEMP/plezy-engine/extracted"
+
+          ENGINE_ROOT="$RUNNER_TEMP/plezy-engine/extracted"
+
+          echo "===== Extracted engine layout ====="
+          find "$ENGINE_ROOT" -maxdepth 4 -type d | sort
+
+          # The Plezy build script expects these directories directly
+          # under FLUTTER_LOCAL_ENGINE/out/.
+          if [[ ! -d "$ENGINE_ROOT/out/host_release" ||
+                ! -d "$ENGINE_ROOT/out/tvos_release" ]]; then
+            echo "::error::Unexpected engine archive layout."
+            echo "Expected out/host_release and out/tvos_release."
+            echo "Adjust ENGINE_ROOT to the directory containing out/."
+            exit 1
+          fi
+
+          GEN_SNAPSHOT="$ENGINE_ROOT/out/tvos_release/artifacts_arm64/gen_snapshot_arm64"
+
+          if [[ ! -x "$GEN_SNAPSHOT" ]]; then
+            echo "::error::Missing expected tvOS ARM64 gen_snapshot:"
+            echo "$GEN_SNAPSHOT"
+            find "$ENGINE_ROOT/out/tvos_release" \
+              -name 'gen_snapshot*' -print
+            exit 1
+          fi
+
+          echo "FLUTTER_LOCAL_ENGINE=$ENGINE_ROOT" >> "$GITHUB_ENV"
+
+      - name: Verify engine and Dart toolchain
+        shell: bash
         run: |
-          echo "===== tvos/Podfile ====="
-          cat tvos/Podfile 2>/dev/null || echo "(no tvos/Podfile)"
+          set -euo pipefail
 
-      - name: Setup host_release tools
+          ENGINE="$FLUTTER_LOCAL_ENGINE"
+
+          echo "Flutter:"
+          flutter --version
+
+          echo "Engine Dart runtime:"
+          if [[ -x "$ENGINE/out/host_release/dart-sdk/bin/dartaotruntime" ]]; then
+            "$ENGINE/out/host_release/dart-sdk/bin/dartaotruntime" --version
+          else
+            echo "Engine does not package dartaotruntime; the build script must use a matching Flutter SDK runtime."
+          fi
+
+          echo "Host patched SDK:"
+          test -d "$ENGINE/out/host_release/flutter_patched_sdk"
+
+          echo "tvOS Flutter framework:"
+          test -d "$ENGINE/out/tvos_release/Flutter.framework"
+
+          echo "Cross-target AOT compiler:"
+          "$ENGINE/out/tvos_release/artifacts_arm64/gen_snapshot_arm64" --version
+
+      - name: Generate tvOS Flutter configuration
+        shell: bash
         run: |
-          flutter precache --ios
-          FLUTTER_CACHE=$FLUTTER_ROOT/bin/cache
-          mkdir -p tvos-engine/out/host_release/dart-sdk/bin/snapshots
-          cp "$FLUTTER_CACHE/dart-sdk/bin/dartaotruntime" tvos-engine/out/host_release/dart-sdk/bin/dartaotruntime
-          chmod +x tvos-engine/out/host_release/dart-sdk/bin/dartaotruntime
-          cp "$FLUTTER_CACHE/dart-sdk/version" tvos-engine/out/host_release/dart-sdk/version
-          cp "$FLUTTER_CACHE/dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot" \
-             tvos-engine/out/host_release/dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot
-          cp -R "$FLUTTER_CACHE/artifacts/engine/common/flutter_patched_sdk" \
-             tvos-engine/out/host_release/flutter_patched_sdk
-          # Use the tvOS gen_snapshot from the engine zip, not the iOS one
-          chmod +x tvos-engine/out/tvos_release/clang_arm64/gen_snapshot
-          # Also symlink to the path xcode_appletv.sh checks first
-          ln -sf \
-            "$PWD/tvos-engine/out/tvos_release/clang_arm64/gen_snapshot" \
-            tvos-engine/out/tvos_release/gen_snapshot_arm64
+          set -euo pipefail
 
+          mkdir -p tvos/Flutter
 
-
-      - name: Generate Generated.xcconfig
-        run: |
-          cat > tvos/Flutter/Generated.xcconfig << EOF
+          cat > tvos/Flutter/Generated.xcconfig <<EOF
           FLUTTER_ROOT=$FLUTTER_ROOT
-          FLUTTER_APPLICATION_PATH=$PWD
-          COCOAPODS_PARALLEL_CODE_SIGN=true
+          FLUTTER_APPLICATION_PATH=$GITHUB_WORKSPACE
+          FLUTTER_LOCAL_ENGINE=$FLUTTER_LOCAL_ENGINE
           FLUTTER_TARGET=lib/main.dart
           FLUTTER_BUILD_DIR=build
           FLUTTER_BUILD_NAME=${{ steps.version.outputs.build_name }}
           FLUTTER_BUILD_NUMBER=${{ steps.version.outputs.build_number }}
-          DART_OBFUSCATION=false
-          TRACK_WIDGET_CREATION=false
-          TREE_SHAKE_ICONS=false
-          PACKAGE_CONFIG=$PWD/.dart_tool/package_config.json
-          FLUTTER_LOCAL_ENGINE=$PWD/tvos-engine
+          PACKAGE_CONFIG=$GITHUB_WORKSPACE/.dart_tool/package_config.json
+          TVOS_DEPLOYMENT_TARGET=15.0
+          COCOAPODS_PARALLEL_CODE_SIGN=true
           EOF
-          echo "===== Generated.xcconfig ====="
+
           cat tvos/Flutter/Generated.xcconfig
 
-      - name: Install CocoaPods dependencies
-        run: cd tvos && pod install
+      - name: Wire tvOS plugin implementations
+        run: ruby tvos/scripts/wire_plugins.rb
 
-      - name: Build tvOS (no codesign)
+      - name: Install CocoaPods
         run: |
           cd tvos
+          pod install
+
+      - name: Build tvOS archive without signing
+        shell: bash
+        run: |
+          set -euo pipefail
+
           xcodebuild \
-            -workspace Runner.xcworkspace \
+            -workspace tvos/Runner.xcworkspace \
             -scheme Runner \
+            -configuration Release \
             -sdk appletvos \
-            -destination generic/platform=tvOS \
-            -archivePath $PWD/build/Runner.xcarchive \
-            archive \
+            -destination 'generic/platform=tvOS' \
+            -archivePath "$GITHUB_WORKSPACE/build/tvos/Plezy.xcarchive" \
             CODE_SIGNING_ALLOWED=NO \
-            2>&1 | tee /tmp/xcodebuild.log
-          echo "===== What Dart file was compiled? ====="
-          grep -E "tvos_probe|main\.dart" /tmp/xcodebuild.log | grep -v "export\|FLUTTER_TARGET" | head -10
-          echo "===== AOT compilation result ====="
-          grep -E "gen_snapshot|AOT|snapshot_assembly|app\.dill" /tmp/xcodebuild.log | head -10
-          echo "===== Any errors? ====="
-          grep -E "error:|Error:|FAILED|failed" /tmp/xcodebuild.log | grep -v "warning\|note:" | head -20
+            archive 2>&1 | tee "$RUNNER_TEMP/tvos-xcodebuild.log"
 
-      - name: Fix icudtl.dat in App bundle
+      - name: Verify archive and Flutter AOT output
+        shell: bash
         run: |
-          APP="tvos/build/Runner.xcarchive/Products/Applications/Runner.app"
+          set -euo pipefail
+
+          APP="build/tvos/Plezy.xcarchive/Products/Applications/Runner.app"
           ASSETS="$APP/Frameworks/App.framework/flutter_assets"
-          if [ -d "$ASSETS" ]; then
-            cp tvos-engine/out/tvos_release/Flutter.framework/icudtl.dat "$ASSETS/icudtl.dat"
-            echo "icudtl.dat copied: $(du -h "$ASSETS/icudtl.dat")"
-          else
-            echo "MISSING flutter_assets — build failed"
-            find tvos/build -name "flutter_assets" -type d 2>/dev/null
-            exit 1
-          fi
 
+          test -d "$APP"
+          test -f "$APP/Info.plist"
+          test -f "$APP/Frameworks/App.framework/App"
+          test -f "$APP/Frameworks/Flutter.framework/Flutter"
+          test -d "$ASSETS"
 
+          echo "===== App version and bundle ID ====="
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist"
 
+          echo "===== Flutter assets ====="
+          ls -lah "$ASSETS"
 
-      - name: Inspect built app
+          echo "===== AOT executable architectures ====="
+          file "$APP/Frameworks/App.framework/App"
+          lipo -info "$APP/Frameworks/App.framework/App"
+
+          echo "===== Flutter engine architectures ====="
+          file "$APP/Frameworks/Flutter.framework/Flutter"
+          lipo -info "$APP/Frameworks/Flutter.framework/Flutter"
+
+          echo "===== Build errors and AOT diagnostics ====="
+          grep -Ei \
+            'error:|gen_snapshot|Compiling AOT|Compiling Assembly|Linking app|ERROR:' \
+            "$RUNNER_TEMP/tvos-xcodebuild.log" | tail -100 || true
+
+          echo "===== Minimum OS versions ====="
+          /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' \
+            "$APP/Frameworks/Flutter.framework/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' \
+            "$APP/Frameworks/App.framework/Info.plist"
+
+      - name: Create IPA for signing
+        shell: bash
         run: |
-          APP="tvos/build/Runner.xcarchive/Products/Applications/Runner.app"
-          echo "===== Frameworks ====="
-          ls -la "$APP/Frameworks/"
-          echo ""
-          echo "===== flutter_assets contents ====="
-          ls -la "$APP/Frameworks/App.framework/flutter_assets/" 2>/dev/null || true
-          echo ""
-          echo "===== icudtl.dat present? ====="
-          ls -la "$APP/Frameworks/App.framework/flutter_assets/icudtl.dat" \
-            2>/dev/null || echo "MISSING icudtl.dat"
-          echo ""
-          echo "===== App.framework/App size (should be ~10-15MB for probe) ====="
-          du -h "$APP/Frameworks/App.framework/App"
-          echo ""
-          echo "===== Flutter.framework size ====="
-          du -h "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null
-          echo ""
-          echo "===== Key symbols in BUILT Flutter.framework ====="
-          nm "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null \
-            | grep -i "SceneDelegate" \
-            || echo "FlutterSceneDelegate NOT in built Flutter.framework"
-          nm "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null \
-            | grep -i "ImplicitEngine" \
-            || echo "FlutterImplicitEngineDelegate NOT in built Flutter.framework"
+          set -euo pipefail
 
+          APP="build/tvos/Plezy.xcarchive/Products/Applications/Runner.app"
+          STAGING="$RUNNER_TEMP/plezy-tvos-ipa"
 
-      - name: Create IPA
-        run: |
-          mkdir -p tvos/Payload
-          cp -r tvos/build/Runner.xcarchive/Products/Applications/Runner.app tvos/Payload/
-          cd tvos && zip -r plezy-tvos-${{ steps.version.outputs.build_name }}.ipa Payload
+          mkdir -p "$STAGING/Payload"
+          ditto "$APP" "$STAGING/Payload/Runner.app"
 
-      - name: Upload IPA
+          (
+            cd "$STAGING"
+            ditto -c -k --sequesterRsrc --keepParent \
+              Payload \
+              "$GITHUB_WORKSPACE/plezy-tvos-${{ steps.version.outputs.build_name }}.ipa"
+          )
+
+          unzip -l "plezy-tvos-${{ steps.version.outputs.build_name }}.ipa" \
+            | head -60
+
+      - name: Upload tvOS IPA
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: tvos-ipa-${{ steps.version.outputs.build_name }}
-          path: tvos/plezy-tvos-${{ steps.version.outputs.build_name }}.ipa
+          name: plezy-tvos-${{ steps.version.outputs.build_name }}
+          path: plezy-tvos-${{ steps.version.outputs.build_name }}.ipa
+          if-no-files-found: error
+          retention-days: 14
