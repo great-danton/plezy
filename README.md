@@ -1,4 +1,4 @@
-#tvOS builds of Plezy
+# tvOS builds of Plezy
 
 
 <h1>
