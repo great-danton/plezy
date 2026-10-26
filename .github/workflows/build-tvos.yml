@@ -21,7 +21,7 @@ jobs:
 
     env:
       FLUTTER_VERSION: "3.47.1"
-      ENGINE_VERSION: ${{ inputs.engine_version }}
+      ENGINE_VERSION: "3.47.1"
       TRUSTED_BUILD_CACHE_VERSION: trusted-tvos-v1
 
     steps:
@@ -85,50 +85,40 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          mkdir -p "$RUNNER_TEMP/plezy-engine"
-
-          gh release download "$ENGINE_VERSION" \
+          
+          ENGINE_VERSION="3.47.1"
+          ENGINE_SHA256="1cc6e4f1441ea2288512036f46589057eb54228732a27baf2e1419354d173c7c"
+          
+          ENGINE_DIR="$RUNNER_TEMP/plezy-engine"
+          ARCHIVE="$ENGINE_DIR/flutter-tvos-${ENGINE_VERSION}.tar.gz"
+          
+          mkdir -p "$ENGINE_DIR"
+          
+          gh release download "v${ENGINE_VERSION}" \
             --repo edde746/flutter-plezy \
             --pattern "flutter-tvos-${ENGINE_VERSION}.tar.gz" \
-            --dir "$RUNNER_TEMP/plezy-engine"
-
-          ARCHIVE="$RUNNER_TEMP/plezy-engine/flutter-tvos-${ENGINE_VERSION}.tar.gz"
-
-          if [[ ! -f "$ARCHIVE" ]]; then
-            echo "::error::Engine release archive was not downloaded."
-            exit 1
-          fi
-
-          mkdir -p "$RUNNER_TEMP/plezy-engine/extracted"
-          tar -xzf "$ARCHIVE" \
-            -C "$RUNNER_TEMP/plezy-engine/extracted"
-
-          ENGINE_ROOT="$RUNNER_TEMP/plezy-engine/extracted"
-
+            --dir "$ENGINE_DIR"
+          
+          test -f "$ARCHIVE"
+          
+          echo "$ENGINE_SHA256  $ARCHIVE" | shasum -a 256 -c -
+          
+          mkdir -p "$ENGINE_DIR/extracted"
+          tar -xzf "$ARCHIVE" -C "$ENGINE_DIR/extracted"
+          
           echo "===== Extracted engine layout ====="
-          find "$ENGINE_ROOT" -maxdepth 4 -type d | sort
-
-          # The Plezy build script expects these directories directly
-          # under FLUTTER_LOCAL_ENGINE/out/.
+          find "$ENGINE_DIR/extracted" -maxdepth 5 \
+            \( -type d -o -name 'gen_snapshot*' \) -print | sort
+          
+          ENGINE_ROOT="$ENGINE_DIR/extracted"
+          
+          # Find the directory that actually contains the engine output.
           if [[ ! -d "$ENGINE_ROOT/out/host_release" ||
                 ! -d "$ENGINE_ROOT/out/tvos_release" ]]; then
-            echo "::error::Unexpected engine archive layout."
-            echo "Expected out/host_release and out/tvos_release."
-            echo "Adjust ENGINE_ROOT to the directory containing out/."
+            echo "::error::Expected out/host_release and out/tvos_release."
             exit 1
           fi
-
-          GEN_SNAPSHOT="$ENGINE_ROOT/out/tvos_release/artifacts_arm64/gen_snapshot_arm64"
-
-          if [[ ! -x "$GEN_SNAPSHOT" ]]; then
-            echo "::error::Missing expected tvOS ARM64 gen_snapshot:"
-            echo "$GEN_SNAPSHOT"
-            find "$ENGINE_ROOT/out/tvos_release" \
-              -name 'gen_snapshot*' -print
-            exit 1
-          fi
-
+          
           echo "FLUTTER_LOCAL_ENGINE=$ENGINE_ROOT" >> "$GITHUB_ENV"
 
       - name: Verify engine and Dart toolchain
@@ -201,6 +191,27 @@ jobs:
             -archivePath "$GITHUB_WORKSPACE/build/tvos/Plezy.xcarchive" \
             CODE_SIGNING_ALLOWED=NO \
             archive 2>&1 | tee "$RUNNER_TEMP/tvos-xcodebuild.log"
+            
+            set -euo pipefail
+            
+            ENGINE="$FLUTTER_LOCAL_ENGINE"
+            APP="build/tvos/Plezy.xcarchive/Products/Applications/Runner.app"
+            ASSETS="$APP/Frameworks/App.framework/flutter_assets"
+            
+            if [[ ! -f "$ASSETS/icudtl.dat" ]]; then
+              ICU_SOURCE="$ENGINE/out/tvos_release/Flutter.framework/icudtl.dat"
+            
+              if [[ ! -f "$ICU_SOURCE" ]]; then
+                echo "::error::icudtl.dat is missing from both the app assets and engine framework."
+                find "$ENGINE/out/tvos_release" -name icudtl.dat -print
+                exit 1
+              fi
+            
+              cp "$ICU_SOURCE" "$ASSETS/icudtl.dat"
+            fi
+            
+            test -s "$ASSETS/icudtl.dat"
+            echo "Verified icudtl.dat in app assets."
 
       - name: Verify archive and Flutter AOT output
         shell: bash
